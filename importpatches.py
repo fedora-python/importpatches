@@ -18,7 +18,7 @@ SPECIAL_PATCH_NUMBERS = {
     'python-2.6-rpath.patch': 16,
     'python-2.6.4-distutils-rpath.patch': 17,
 }
-PATCH_SECTION_START = '# (Patches taken from Git)'
+PATCH_SECTION_START = '# (Patches taken from github.com/fedora-python/cpython)'
 PATCH_SECTION_STARTS = {
     PATCH_SECTION_START,
     '# 00001 #',
