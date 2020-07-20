@@ -30,7 +30,7 @@ In your clone of dist-git, run `git config importpatches.upstream .../cpython`.
 
 ## Usage
 
-Just run `importpatches.py` in your clone of dist-git.
+Run `importpatches.py` without arguments in your clone of dist-git.
 If the defaults don't work for you, run with `--help` to see the options.
 
 
