@@ -28,7 +28,6 @@ PATCH_SECTION_STARTS = {
 }
 PATCH_SECTION_END = '# (New patches go here ^^^)'
 FLIENAME_SAFE_RE = re.compile('^[a-zA-Z0-9._-]+$')
-RELEASE_RE = re.compile(r'Release: ([0-9]+)%\{\?dist\}')
 
 BUNDLED_VERSION_RE = re.compile('-_([A-Z]+)_VERSION = "([0-9.]+)"')
 BUNDLED_VERSION_BLURB = """
