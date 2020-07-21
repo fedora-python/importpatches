@@ -19,7 +19,9 @@ conventions.)
 
 ## Setup
 
-Add the script to your `$PATH`.
+Add the script to your `$PATH`, for example:
+
+    ln -s $PWD/importpatches.py ~/.local/bin/importpatches
 
 The script needs to know where your local clone of `fedora-python/cpython` is,
 and uses Git configuration as a default.
