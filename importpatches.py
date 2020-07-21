@@ -196,21 +196,21 @@ def run(*args, echo_stdout=True, **kwargs):
         f"(default is taken from Git config option `{REPO_KEY}`)"
 )
 @click.option(
-    '-t', '--tag', default=None, metavar='TAG',
-    help="Git tag corresponding to the upstream release " +
+    '-b', '--base', default=None, metavar='TAG',
+    help="Git tag (commit-ish) corresponding to the upstream release " +
         "(default is derived from %{upstream_version} in SPEC) " +
         "(example: v3.9.0b4)"
 )
 @click.option(
-    '-f', '--head', default=None, metavar='BRANCH',
-    help="Git commit-ish from which to take patches " +
-        "(default is derived from --tag and Release in the spec) " +
-        "(example: fedora-3.9)"
+    '-f', '--head', default=None, metavar='TAG',
+    help="Git tag (commit-ish) from which to take patches " +
+        "(default is derived from --base and Release in the spec) " +
+        "(example: fedora-3.9.0b4-1)"
 )
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, tag, head):
+def main(spec, repo, base, head):
     """Update Fedora Python dist-git spec & patches from a Git repository
 
     Meant to be run in a local clone of Fedora's pythonX.Y dist-git.
@@ -274,7 +274,7 @@ def main(spec, repo, tag, head):
             repo = proc.stdout.strip()
             click.secho(f'Assuming --repo={repo}', fg='yellow')
 
-        if tag == None:
+        if base == None:
             with spec.open() as f:
                 rpm_globals = []
                 for line in f:
@@ -287,14 +287,14 @@ def main(spec, repo, tag, head):
                             *(f'-D{d}' for d in rpm_globals),
                             '--eval', '%upstream_version'
                         ).stdout.strip()
-                        tag = f'v{upstream_version}'
+                        base = f'v{upstream_version}'
                         break
                 else:
                     raise click.UsageError(
                         "Tag of upstream release not found in spec; check " +
-                        "logic in the script or specify --tag explicitly."
+                        "logic in the script or specify --base explicitly."
                     )
-            click.secho(f'Assuming --tag={tag}', fg='yellow')
+            click.secho(f'Assuming --base={base}', fg='yellow')
 
         if head == None:
             release = run(
@@ -303,18 +303,18 @@ def main(spec, repo, tag, head):
                 '--queryformat=%{release}\n',
                 '--specfile', str(spec),
             ).stdout.splitlines()[0]
-            upstream_version = tag.lstrip('v')
+            upstream_version = base.lstrip('v')
             head = f'fedora-{upstream_version}-{release}'
             click.secho(f'Assuming --head={head}', fg='yellow')
 
         proc = run(
-            'git', 'rev-list', head, '^' + tag,
+            'git', 'rev-list', head, '^' + base,
             cwd=repo, echo_stdout=False, check=False,
         )
         if proc.returncode != 0:
             click.secho(
                 "Expected commits were not found. " +
-                "Specify --tag or --head explicitly.",
+                "Specify --base or --head explicitly.",
                 fg='red',
             )
             def cyan(text):
@@ -323,7 +323,7 @@ def main(spec, repo, tag, head):
             cmd = f"rpmdev-bumpspec *.spec -c 'Update to {upstream_version}'"
             click.secho(f"- $ {cyan(cmd)}")
             click.secho(
-                f"- Rebase Fedora branch in {cyan(repo)} onto {cyan(tag)} " +
+                f"- Rebase Fedora branch in {cyan(repo)} onto {cyan(base)} " +
                 f"and tag as {cyan(head)}"
             )
             exit(1)
