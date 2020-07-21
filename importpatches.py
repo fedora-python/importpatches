@@ -28,6 +28,7 @@ PATCH_SECTION_STARTS = {
 }
 PATCH_SECTION_END = '# (New patches go here ^^^)'
 FLIENAME_SAFE_RE = re.compile('^[a-zA-Z0-9._-]+$')
+RELEASE_RE = re.compile(r'Release: ([0-9]+)%\{\?dist\}')
 
 BUNDLED_VERSION_RE = re.compile('-_([A-Z]+)_VERSION = "([0-9.]+)"')
 BUNDLED_VERSION_BLURB = """
@@ -203,7 +204,7 @@ def run(*args, echo_stdout=True, **kwargs):
 @click.option(
     '-f', '--head', default=None, metavar='BRANCH',
     help="Git commit-ish from which to take patches " +
-        "(default is derived from --tag) " +
+        "(default is derived from --tag and Release in the spec) " +
         "(example: fedora-3.9)"
 )
 @click.argument(
@@ -296,13 +297,41 @@ def main(spec, repo, tag, head):
             click.secho(f'Assuming --tag={tag}', fg='yellow')
 
         if head == None:
-            pybasever = '.'.join(tag.lstrip('v').split('.')[:2])
-            head = f'fedora-{pybasever}'
+            with spec.open() as f:
+                for line in f:
+                    if match := RELEASE_RE.match(line):
+                        release = match[1]
+                        break
+                else:
+                    raise click.UsageError(
+                        "Release not found in spec; check " +
+                        "logic in the script or specify --head explicitly."
+                    )
+            upstream_version = tag.lstrip('v')
+            head = f'fedora-{upstream_version}-{release}'
             click.secho(f'Assuming --head={head}', fg='yellow')
 
-        log = run(
-            'git', 'rev-list', head, '^' + tag, cwd=repo, echo_stdout=False,
-        ).stdout.splitlines()
+        proc = run(
+            'git', 'rev-list', head, '^' + tag,
+            cwd=repo, echo_stdout=False, check=False,
+        )
+        if proc.returncode != 0:
+            click.secho(
+                "Expected commits were not found. " +
+                "Specify --tag or --head explicitly.",
+                fg='red',
+            )
+            def cyan(text):
+                return click.style(text, fg='cyan')
+            click.secho("Or did you forget one of these?")
+            cmd = f"rpmdev-bumpspec *.spec -c 'Update to {upstream_version}'"
+            click.secho(f"- $ {cyan(cmd)}")
+            click.secho(
+                f"- Rebase Fedora branch in {cyan(repo)} onto {cyan(tag)} " +
+                f"and tag as {cyan(head)}"
+            )
+            exit(1)
+        log = proc.stdout.splitlines()
         if len(log) >= 100:
             exit(
                 'There are more than 100 patches. Probably a wrong branch ' +
