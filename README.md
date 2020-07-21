@@ -42,3 +42,7 @@ The script adds Git hash IDs to the spec file.
 These are hashes of the patch content, ignoring tings like context lines and
 comments.
 When one of these changes, pay special atttention to the patch diff.
+
+## License
+
+The script is available under the MIT license. May it serve you well.
