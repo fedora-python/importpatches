@@ -297,16 +297,12 @@ def main(spec, repo, tag, head):
             click.secho(f'Assuming --tag={tag}', fg='yellow')
 
         if head == None:
-            with spec.open() as f:
-                for line in f:
-                    if match := RELEASE_RE.match(line):
-                        release = match[1]
-                        break
-                else:
-                    raise click.UsageError(
-                        "Release not found in spec; check " +
-                        "logic in the script or specify --head explicitly."
-                    )
+            release = run(
+                'rpm',
+                '--undefine=dist',
+                '--queryformat=%{release}\n',
+                '--specfile', str(spec),
+            ).stdout.splitlines()[0]
             upstream_version = tag.lstrip('v')
             head = f'fedora-{upstream_version}-{release}'
             click.secho(f'Assuming --head={head}', fg='yellow')
