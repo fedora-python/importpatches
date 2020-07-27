@@ -64,7 +64,8 @@ def handle_patch(repo, commit_id, *, tempdir):
         cwd=repo,
     ).stdout.strip()
     summary, _, message_body = message.partition('\n')
-    if match := PATCH_NUMBER_RE.match(summary):
+    match = PATCH_NUMBER_RE.match(summary)
+    if match:
         number = int(match.group(1))
         paths = list(Path('.').glob(f'{number:05d}-*.patch'))
         if len(paths) == 0:
@@ -78,7 +79,8 @@ def handle_patch(repo, commit_id, *, tempdir):
             )
     elif summary.endswith('.patch') and FLIENAME_SAFE_RE.match(summary):
         path = Path(summary)
-        if match := re.search('\d{5,}', message):
+        match = re.search('\d{5,}', message)
+        if match:
             number = int(str(match.group(0)))
         elif summary in SPECIAL_PATCH_NUMBERS:
             number = SPECIAL_PATCH_NUMBERS[summary]
@@ -145,7 +147,8 @@ def process_rpmwheels_patch(path):
         for line in f:
             if line.startswith('-_'):
                 print(line, BUNDLED_VERSION_RE)
-            if match := BUNDLED_VERSION_RE.match(line.strip()):
+            match = BUNDLED_VERSION_RE.match(line.strip())
+            if match:
                 if match[1] in versions:
                     exit(f'Bundled version for {match[1]} appears twice')
                 versions[match[1]] = match[2]
