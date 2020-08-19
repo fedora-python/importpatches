@@ -28,6 +28,8 @@ and uses Git configuration as a default.
 
 In your clone of dist-git, run `git config importpatches.upstream .../cpython`.
 (Replace `.../cpython` with your clone of `fedora-python/cpython`, of course.)
+Alternatively, run `git config` with `--global`
+to avoid the need to set this in all dist-git clones of Pythons.
 
 
 ## Usage
