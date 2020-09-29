@@ -359,15 +359,25 @@ def main(spec, repo, base, head):
             with spec.open('r') as infile:
                 echoing = True
                 found_start = False
+                found_modern_start = False
                 for line in infile:
                     if line.rstrip() == PATCH_SECTION_END:
                         echoing = True
                     if line.rstrip() in PATCH_SECTION_STARTS:
-                        outfile.write(PATCH_SECTION_START + '\n')
+                        is_modern = (line.rstrip() == PATCH_SECTION_START)
                         if found_start:
-                            exit('Spec has multiple starts of section')
+                            if found_modern_start and not is_modern:
+                                # Specfile was already converted
+                                if echoing:
+                                    outfile.write(line)
+                                continue
+                            else:
+                                exit('Spec has multiple starts of section')
                         found_start = True
+                        if is_modern:
+                            found_modern_start = True
                         echoing = False
+                        outfile.write(PATCH_SECTION_START + '\n')
                         outfile.writelines(patches_section)
                         outfile.write('\n')
                     if echoing:
