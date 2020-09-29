@@ -28,6 +28,10 @@ PATCH_SECTION_STARTS = {
 }
 PATCH_SECTION_END = '# (New patches go here ^^^)'
 FLIENAME_SAFE_RE = re.compile('^[a-zA-Z0-9._-]+$')
+KEEP_PATCHES = {
+    # This python2 patch is special
+    '05000-autotool-intermediates.patch',
+}
 
 BUNDLED_VERSION_RE = re.compile('-_([A-Z]+)_VERSION = "([0-9.]+)"')
 BUNDLED_VERSION_BLURB = """
@@ -392,7 +396,8 @@ def main(spec, repo, base, head):
 
         # Remove all existing patches
         for path in Path('.').glob('*.patch'):
-            path.unlink()
+            if path.name not in KEEP_PATCHES:
+                path.unlink()
 
         # Move all files from tempdir to current directory
         for path in tempdir.iterdir():
