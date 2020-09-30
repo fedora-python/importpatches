@@ -282,7 +282,12 @@ def main(spec, repo, base, head, python_version):
                     "Specify --python-version expliticly."
                 )
         try:
-            python_version = tuple(int(c) for c in python_version.split('.'))
+            if '.' in python_version:
+                # for python3.6.spec:
+                python_version = tuple(int(c) for c in python_version.split('.'))
+            else:
+                # for python36.spec or python3.spec:
+                python_version = (int(python_version[0]), int(python_version[1:] or 0))
         except ValueError:
             raise click.UsageError(
                 "--python-version must be dot-separated integers."
