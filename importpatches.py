@@ -60,7 +60,7 @@ class PatchInformation:
     trailer: str = ''
 
 
-def handle_patch(repo, commit_id, *, tempdir):
+def handle_patch(repo, commit_id, *, tempdir, python_version):
     """Handle a single patch, writing it to `tempdir` and returning info
     """
     message = run(
@@ -124,7 +124,7 @@ def handle_patch(repo, commit_id, *, tempdir):
                 continue
             spec_comment.append(line)
 
-    if number == 189:
+    if number == 189 and python_version >= (3, 0):
         trailer = process_rpmwheels_patch(tempdir / path.name)
     else:
         trailer = ''
@@ -213,10 +213,14 @@ def run(*args, echo_stdout=True, **kwargs):
         "(default is derived from --base and Release in the spec) " +
         "(example: fedora-3.9.0b4-1)"
 )
+@click.option(
+    '-v', '--python-version', default=None, metavar='X.Y',
+    help="Python version, e.g. 3.10 (default extracted from spec name)"
+)
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, base, head):
+def main(spec, repo, base, head, python_version):
     """Update Fedora Python dist-git spec & patches from a Git repository
 
     Meant to be run in a local clone of Fedora's pythonX.Y dist-git.
@@ -264,6 +268,25 @@ def main(spec, repo, base, head):
                 )
             spec = specs[0].resolve()
             click.secho(f'Assuming SPEC is {spec}', fg='yellow')
+
+        if python_version is None:
+            if spec.name.startswith('python') and spec.name.endswith('.spec'):
+                python_version = spec.name[len('python'):-len('.spec')]
+                click.secho(
+                    f'Assuming --python-version={python_version}',
+                    fg='yellow'
+                )
+            else:
+                raise click.UsageError(
+                    "Cound not get version from spec name. " +
+                    "Specify --python-version expliticly."
+                )
+        try:
+            python_version = tuple(int(c) for c in python_version.split('.'))
+        except ValueError:
+            raise click.UsageError(
+                "--python-version must be dot-separated integers."
+            )
 
         if repo == None:
             proc = run(
@@ -344,6 +367,7 @@ def main(spec, repo, base, head):
         for commit_id in reversed(log):
             result = handle_patch(
                 repo, commit_id, tempdir=tempdir,
+                python_version=python_version,
             )
             comment = '\n'.join(
                 f'# {l}' if l else '#' for l in result.comment.splitlines()
