@@ -124,7 +124,7 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
                 continue
             spec_comment.append(line)
 
-    if number == 189 and python_version >= (3, 0):
+    if number == 189 and (python_version >= (3, 5) or python_version == (3,)):
         trailer = process_rpmwheels_patch(tempdir / path.name)
     else:
         trailer = ''
