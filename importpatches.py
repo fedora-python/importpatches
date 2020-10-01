@@ -271,7 +271,12 @@ def main(spec, repo, base, head, python_version):
 
         if python_version is None:
             if spec.name.startswith('python') and spec.name.endswith('.spec'):
+                # "python3.6.spec" -> python_version="3.6"
                 python_version = spec.name[len('python'):-len('.spec')]
+                if '.' not in python_version:
+                    # "python36.spec" -> python_version="3.6"
+                    # "python3.spec" -> python_version="3"
+                    python_version = '.'.join(python_version)
                 click.secho(
                     f'Assuming --python-version={python_version}',
                     fg='yellow'
@@ -282,12 +287,7 @@ def main(spec, repo, base, head, python_version):
                     "Specify --python-version expliticly."
                 )
         try:
-            if '.' in python_version:
-                # for python3.6.spec:
-                python_version = tuple(int(c) for c in python_version.split('.'))
-            else:
-                # for python36.spec or python3.spec:
-                python_version = (int(python_version[0]), int(python_version[1:] or 0))
+            python_version = tuple(int(c) for c in python_version.split('.'))
         except ValueError:
             raise click.UsageError(
                 "--python-version must be dot-separated integers."
