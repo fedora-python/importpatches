@@ -313,7 +313,7 @@ def main(spec, repo, base, head, python_version):
                 rpm_globals = []
                 for line in f:
                     line = line.strip()
-                    if line.startswith('%global '):
+                    if line.startswith('%global ') and '%{expand:' not in line:
                         rpm_globals.append(removeprefix(line, '%global '))
                     if line.startswith('%global upstream_version'):
                         upstream_version = run(
