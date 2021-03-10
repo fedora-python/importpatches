@@ -42,6 +42,13 @@ BUNDLED_VERSION_BLURB = """
 # In such cases, the patch needs to be amended and the versions updated here:
 """
 
+# Older git versions guessed the abbrev count for hashes, but the behavior has changed
+# We use explicit --abbrev value to match the current patches content
+ABBREV = {
+    (2, 7): 11,
+    ...: 10,
+}
+
 
 def removeprefix(self, prefix):
     # PEP-616 backport
@@ -100,10 +107,12 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
 
     patch_path = tempdir / path.name
 
+    abbrev = ABBREV.get(python_version, ABBREV[...])
+
     with open(patch_path, 'w') as f:
         proc = run(
             'git', 'format-patch', '--stdout', '-1',
-            '--minimal', '--patience', '--abbrev=10', '--find-renames',
+            '--minimal', '--patience', f'--abbrev={abbrev}', '--find-renames',
             '--zero-commit', '--no-signature',
             commit_id,
             cwd=repo, stdout=f
