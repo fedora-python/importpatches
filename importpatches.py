@@ -29,7 +29,8 @@ PATCH_SECTION_STARTS = {
 PATCH_SECTION_END = '# (New patches go here ^^^)'
 FLIENAME_SAFE_RE = re.compile('^[a-zA-Z0-9._-]+$')
 KEEP_PATCHES = {
-    # This python2 patch is special
+    # These python2 patches are special
+    '04000-disable-tk.patch',
     '05000-autotool-intermediates.patch',
 }
 
