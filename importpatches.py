@@ -123,16 +123,15 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
 
     spec_comment = []
     if summary.endswith('.patch'):
-        body = removeprefix(message_body.strip(), f'{number:05d} #\n')
-        spec_comment.append(body)
+        message_body = removeprefix(message_body.strip(), f'{number:05d} #\n')
     else:
         spec_comment.append(re.sub(PATCH_NUMBER_RE, '', summary))
-        for line in message_body.splitlines():
-            if line.lower().startswith('co-authored-by:'):
-                continue
-            if re.fullmatch(r'\(cherry picked from commit .{40}\)', line):
-                continue
-            spec_comment.append(line)
+    for line in message_body.splitlines():
+        if line.lower().startswith('co-authored-by:'):
+            continue
+        if re.fullmatch(r'\(cherry picked from commit .{40}\)', line):
+            continue
+        spec_comment.append(line)
 
     if number == 189 and (python_version >= (3, 6) or python_version == (3,)):
         trailer = process_rpmwheels_patch(tempdir / path.name)
