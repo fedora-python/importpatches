@@ -237,7 +237,7 @@ def main(spec, repo, base, head, python_version):
     REPO should be a local clone of https://github.com/fedora-python/cpython.
 
     Patches for all commits between TAG and BRANCH in that repository are
-    formatted into loal files, and the *.spec file is updated with comments
+    formatted into local files, and the *.spec file is updated with comments
     taken from commit messages.
 
     Patches are numbered with numbers from:
