@@ -28,6 +28,7 @@ PATCH_SECTION_STARTS = {
 }
 PATCH_SECTION_END = '# (New patches go here ^^^)'
 FLIENAME_SAFE_RE = re.compile('^[a-zA-Z0-9._-]+$')
+SOURCE_PATCH_RE = re.compile(r'^Source\d*:\s*(?P<filename>\S+\.patch)')
 KEEP_PATCHES = {
     # These python2 patches are special
     '04000-disable-tk.patch',
@@ -397,12 +398,15 @@ def main(spec, repo, base, head, python_version):
 
         spec_lines = []
         outfile_path = tempdir / spec.name
+        keep_patches = KEEP_PATCHES.copy()
         with open(outfile_path, 'w') as outfile:
             with spec.open('r') as infile:
                 echoing = True
                 found_start = False
                 found_modern_start = False
                 for line in infile:
+                    if match := SOURCE_PATCH_RE.match(line.rstrip()):
+                        keep_patches.add(match.group('filename'))
                     if line.rstrip() == PATCH_SECTION_END:
                         echoing = True
                     if line.rstrip() in PATCH_SECTION_STARTS:
@@ -434,7 +438,7 @@ def main(spec, repo, base, head, python_version):
 
         # Remove all existing patches
         for path in Path('.').glob('*.patch'):
-            if path.name not in KEEP_PATCHES:
+            if path.name not in keep_patches:
                 path.unlink()
 
         # Move all files from tempdir to current directory
