@@ -114,7 +114,7 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
         proc = run(
             'git', 'format-patch', '--stdout', '-1',
             '--minimal', '--patience', f'--abbrev={abbrev}', '--find-renames',
-            '--zero-commit', '--no-signature',
+            '--zero-commit', '--no-signature', '--keep-subject',
             commit_id,
             cwd=repo, stdout=f
         )
