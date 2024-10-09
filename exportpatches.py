@@ -183,8 +183,15 @@ def main(spec, repo, base, branch, python_version):
             for line in f:
                 line = line.strip()
                 if line.startswith('Patch'):
-                    patch_number = removeprefix(re.match("^Patch[0-9]{3}",
+                    try:
+                        patch_number = removeprefix(re.match("^Patch[0-9]{3}",
 line).group(), 'Patch')
+                    except AttributeError:
+                        click.secho(
+                            "Patch number is missing.",
+                            fg='red',
+                        )
+                        exit(1)
                     update = {patch_number : removeprefix(line, 'Patch[0-9]*: *',
 regex=True)}
                     patches.update(**update)
