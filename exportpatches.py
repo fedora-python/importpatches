@@ -238,6 +238,10 @@ regex=True)}
         )
 
         for patch_number, patch in patches.items():
+            head_hash = run(
+                *shlex.split(f"git rev-parse HEAD")
+            )
+
             patch_filename = patch.rsplit('/', 1)[-1]
             try:
                 proc = run(
@@ -261,6 +265,15 @@ regex=True)}
                 proc = run(
                     'git', 'commit', '--amend', '-m', f'{patch_number_with_padding}: {proc.stdout}'
                 )
+            head1_hash = run(
+                *shlex.split(f"git rev-parse HEAD^1")
+            )
+            if head_hash.stdout != head1_hash.stdout:
+                click.secho(
+                    "Multiple commits in one patch are not supported.",
+                    fg='red',
+                )
+                exit(1)
 
     # TODO: git tag fedora-3.8.3-1
     # TODO: git push fedora-python fedora-3.8.3-1
