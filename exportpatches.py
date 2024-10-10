@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 import shlex
 import re
+import readline
 import tempfile
 import os
 
@@ -275,9 +276,59 @@ regex=True)}
                 )
                 exit(1)
 
-    # TODO: git tag fedora-3.8.3-1
-    # TODO: git push fedora-python fedora-3.8.3-1
-    # TODO: git push --force -u fedora-python fedora-3.8
+    tags = run(
+        *shlex.split(f"git tag"),
+        echo_stdout=False
+    )
+    release = 0
+    for tag in tags.stdout.split('\n'):
+        if tag.startswith(f"fedora-{upstream_version}"):
+            release += 1
+
+    click.secho(f"About to tag the current state of repository with tag fedora-{upstream_version}-{release+1}. Press y/n or e for edit.", fg='yellow')
+    c = input()
+    try:
+        new_tag = f"fedora-{upstream_version}-{release+1}"
+        if c == 'e':
+            new_tag = input("New tag: ")
+        if c == 'y' or c == 'e':
+            proc = run(
+                *shlex.split(f"git tag {new_tag}")
+            )
+        else:
+            click.secho(
+                f"Exiting...",
+                fg='red',
+            )
+            exit(1)
+    except subprocess.CalledProcessError:
+        click.secho(
+            f"The {new_tag} tag already exists.",
+            fg='red',
+        )
+        exit(1)
+
+    click.secho(
+        f"Following commands will push the changes:",
+        fg='yellow',
+    )
+    print(f"git push fedora-python {new_tag}")
+    print(f"git push --force -u fedora-python fedora-{python_version}")
+    click.secho(
+        f"Do you wish to continue? [y/n]",
+        fg='yellow',
+    )
+    c = input()
+    if c == 'y':
+        print("Uncomment the actual push when the code is properly tested.")
+        #proc = run(
+        #    *shlex.split(f"git push fedora-python {new_tag}")
+        #)
+        #proc = run(
+        #    *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
+        #)
+    else:
+        exit(1)
 
     click.secho('OK', fg='green')
 
