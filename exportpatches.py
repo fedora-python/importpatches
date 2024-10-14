@@ -271,7 +271,7 @@ regex=True)}
             )
             if head_hash.stdout != head1_hash.stdout:
                 click.secho(
-                    "Multiple commits in one patch are not supported.",
+                    "Multiple commits in one patch are not supported. Commit were cherry-picked, you can continue manually in the repo.",
                     fg='red',
                 )
                 exit(1)
