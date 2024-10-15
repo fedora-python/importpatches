@@ -78,10 +78,18 @@ def run(*args, echo_stdout=True, **kwargs):
     '-v', '--python-version', default=None, metavar='X.Y',
     help="Python version, e.g. 3.10 (default extracted from spec name)"
 )
+@click.option(
+    '-x', '--release', default=None, metavar='XY',
+    help="Release, e.g. 15 (default extracted from spec file release)"
+)
+@click.option(
+    '-t', '--tag', default=None, metavar='XY',
+    help="Custom tag, e.g. fedora-3.13.0-1"
+)
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, base, branch, python_version):
+def main(spec, repo, base, branch, python_version, release, tag):
     """
     Update cpython Git repository with patches from dist-git spec
 
@@ -178,6 +186,19 @@ def main(spec, repo, base, branch, python_version):
                     )
             click.secho(f'Assuming --base={base}', fg='yellow')
 
+        if release == None:
+            with spec.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('Release:'):
+                        release = re.search(r"[0-9]+", line).group()
+                        break
+                else:
+                    raise click.UsageError(
+                        "Release not found in spec; check " +
+                        "logic in the script or specify --release explicitly."
+                    )
+            click.secho(f'Assuming --release={release}', fg='yellow')
 
         with spec.open() as f:
             patches = {}
@@ -276,43 +297,46 @@ regex=True)}
                 )
                 exit(1)
 
-    tags = run(
-        *shlex.split(f"git tag"),
-        echo_stdout=False
-    )
-    release = 0
-    for tag in tags.stdout.split('\n'):
-        if tag.startswith(f"fedora-{upstream_version}"):
-            release += 1
+    if tag == None:
+        tag = f'fedora-{upstream_version}-{release}'
 
-    click.secho(f"About to tag the current state of repository with tag fedora-{upstream_version}-{release+1}. Press y/n or e for edit.", fg='yellow')
-    c = input()
-    try:
-        new_tag = f"fedora-{upstream_version}-{release+1}"
-        if c == 'e':
-            new_tag = input("New tag: ")
-        if c == 'y' or c == 'e':
-            proc = run(
-                *shlex.split(f"git tag {new_tag}")
-            )
-        else:
-            click.secho(
-                f"Exiting...",
-                fg='red',
-            )
-            exit(1)
-    except subprocess.CalledProcessError:
-        click.secho(
-            f"The {new_tag} tag already exists.",
-            fg='red',
+    while(True):
+        click.secho(f'Checking if tag ({tag}) already exists', fg='yellow')
+        repo_tags = run(
+            *shlex.split(f"git tag --list {tag}"),
+            echo_stdout=False
         )
-        exit(1)
+        tag_exists = False
+        for repo_tag in repo_tags.stdout.split('\n'):
+            if repo_tag.startswith(f"{tag}"):
+                tag_exists = True
+        if tag_exists:
+            click.secho(
+                f"Tag ({tag}) already exists in the repository.",
+                fg='yellow',
+            )
+            click.secho(f"Create a new tag? [y/n]", fg='yellow')
+            c = input()
+            if c == 'y':
+                tag = input("Tag name: ")
+            else:
+                click.secho(
+                    f"Exiting...",
+                    fg='red',
+                )
+                exit(1)
+        else:
+            break
+
+    click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
+
+    run(*shlex.split(f"git tag {tag}"))
 
     click.secho(
         f"Following commands will push the changes:",
         fg='yellow',
     )
-    print(f"git push fedora-python {new_tag}")
+    print(f"git push fedora-python {tag}")
     print(f"git push --force -u fedora-python fedora-{python_version}")
     click.secho(
         f"Do you wish to continue? [y/n]",
@@ -322,7 +346,7 @@ regex=True)}
     if c == 'y':
         print("Uncomment the actual push when the code is properly tested.")
         #proc = run(
-        #    *shlex.split(f"git push fedora-python {new_tag}")
+        #    *shlex.split(f"git push fedora-python {tag}")
         #)
         #proc = run(
         #    *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
