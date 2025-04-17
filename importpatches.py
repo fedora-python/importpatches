@@ -14,7 +14,7 @@ import click  # dnf install python3-click
 
 
 REPO_KEY = 'importpatches.upstream'
-PATCH_NUMBER_RE = re.compile('^(\d+):')
+PATCH_NUMBER_RE = re.compile(r'^(\d+):')
 SPECIAL_PATCH_NUMBERS = {
     'python-2.7.1-config.patch': 0,
     'python-2.6-rpath.patch': 16,
@@ -92,7 +92,7 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
             )
     elif summary.endswith('.patch') and FLIENAME_SAFE_RE.match(summary):
         path = Path(summary)
-        match = re.search('\d{5,}', message)
+        match = re.search(r'\d{5,}', message)
         if match:
             number = int(str(match.group(0)))
         elif summary in SPECIAL_PATCH_NUMBERS:
