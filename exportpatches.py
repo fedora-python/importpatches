@@ -344,14 +344,17 @@ regex=True)}
     )
     c = input()
     if c == 'y':
-        print("Uncomment the actual push when the code is properly tested.")
-        #proc = run(
-        #    *shlex.split(f"git push fedora-python {tag}")
-        #)
-        #proc = run(
-        #    *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
-        #)
+        proc = run(
+            *shlex.split(f"git push fedora-python {tag}")
+        )
+        proc = run(
+            *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
+        )
     else:
+        click.secho(
+            f"Exiting...",
+            fg='red',
+        )
         exit(1)
 
     click.secho('OK', fg='green')
