@@ -206,7 +206,7 @@ def main(spec, repo, base, branch, python_version, release, tag):
                 line = line.strip()
                 if line.startswith('Patch'):
                     try:
-                        patch_number = removeprefix(re.match("^Patch[0-9]{3}",
+                        patch_number = removeprefix(re.match("^Patch[0-9]{1,5}:",
 line).group(), 'Patch')
                     except AttributeError:
                         click.secho(
