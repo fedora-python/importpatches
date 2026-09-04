@@ -7,23 +7,77 @@ import re
 import readline
 import tempfile
 import os
+import dataclasses
+import enum
 
 import click  # dnf install python3-click
 from rpmautospec import specfile_uses_rpmautospec, calculate_release
 
 
 REPO_KEY = 'importpatches.upstream'
+PATCH_LINE_RE = re.compile(r'^Patch(?P<number>[0-9]{1,5})?:\s*(?P<value>\S+)')
+NUMBERED_FILENAME_RE = re.compile(r'^\d{5}-')
 
 
-def removeprefix(self, prefix, regex=False):
-    if regex:
-        return re.sub(r'^{0}'.format(prefix), '', self)
+class Mode(enum.Enum):
+    NUMBERED = 'numbered'
+    NUMBERLESS = 'numberless'
+
+
+class ExportModeDetectionError(ValueError):
+    """Raised when a spec's Patch declarations are ambiguous/inconsistent"""
+
+
+@dataclasses.dataclass
+class SpecPatch:
+    """A single Patch declaration parsed from the spec file"""
+    number: int | None
+    value: str
+
+
+def detect_export_mode(patches):
+    """Detect whether spec Patch declarations use numbered or numberless
+    conventions
+
+    `patches` is a list of SpecPatch. URL-valued patches (typically added
+    temporarily by hand, e.g. for testing an upstream fix before it's
+    imported properly) are excluded from detection and never influence the
+    result either way. Among the remaining, local-file patches: a 5-digit
+    filename prefix is the primary signal for Mode.NUMBERED (legacy).
+    Otherwise, bare Patch: declarations, or PatchN: numbers present only in
+    the spec (the RHEL 8 compatibility scheme, which has no semantic
+    meaning, so numbers need not be contiguous or in any particular order
+    -- patches may have been manually removed, leaving gaps), mean
+    Mode.NUMBERLESS. A mix of bare and numbered declarations is ambiguous
+    and raises ExportModeDetectionError.
+    """
+    if not patches:
+        return Mode.NUMBERED
+
+    local_patches = [p for p in patches if '://' not in p.value]
+    if not local_patches:
+        return Mode.NUMBERED
+
+    filenames = [p.value.rsplit('/', 1)[-1] for p in local_patches]
+    if any(NUMBERED_FILENAME_RE.match(fn) for fn in filenames):
+        return Mode.NUMBERED
+
+    numbers = [p.number for p in local_patches]
+    if all(n is None for n in numbers) or all(n is not None for n in numbers):
+        return Mode.NUMBERLESS
+    raise ExportModeDetectionError(
+        'Cannot determine numbering mode from spec Patch declarations: no '
+        'filename has a 5-digit number prefix, but Patch tag numbers are a '
+        f'mix of numbered and bare declarations: {numbers!r}'
+    )
+
+
+def removeprefix(self, prefix):
+    # PEP-616 backport
+    if self.startswith(prefix):
+        return self[len(prefix):]
     else:
-        # PEP-616 backport
-        if self.startswith(prefix):
-            return self[len(prefix):]
-        else:
-            return self
+        return self
 
 def run(*args, echo_stdout=True, **kwargs):
     """Like subprocess.run, but with logging and more appropriate defaults"""
@@ -105,6 +159,13 @@ def main(spec, repo, base, branch, python_version, release, tag):
 
     PatchNNNNN: <file>/<url>, where NNNNN is a patch number from:
         https://fedoraproject.org/wiki/SIGs/Python/PythonPatches
+
+    Numberless mode is also supported and auto-detected from the spec: if
+    no Patch filename has a NNNNN- prefix, declarations may be either bare
+    Patch: <file>/<url>, or PatchN: <file>/<url> with N forming a plain
+    1..N sequence (the RHEL 8 compatibility scheme, which has no semantic
+    meaning). In numberless mode, no number is ever added to a commit
+    message, even the RHEL 8 compatibility ones.
 
     When exportpatches successfuly finishes, it is expected to run
     importpatches to import patch to the spec file in a standardized form.
@@ -205,23 +266,37 @@ def main(spec, repo, base, branch, python_version, release, tag):
             click.secho(f'Assuming --release={release}', fg='yellow')
 
         with spec.open() as f:
-            patches = {}
+            patches = []
             for line in f:
                 line = line.strip()
                 if line.startswith('Patch'):
-                    try:
-                        patch_number = removeprefix(re.match("^Patch[0-9]{1,5}:",
-line).group(), 'Patch')
-                    except AttributeError:
+                    match = PATCH_LINE_RE.match(line)
+                    if not match:
                         click.secho(
-                            "Patch number is missing.",
+                            f"Could not parse Patch line: {line}",
                             fg='red',
                         )
                         exit(1)
-                    update = {patch_number : removeprefix(line, 'Patch[0-9]*: *',
-regex=True)}
-                    patches.update(**update)
+                    number_str = match.group('number')
+                    patches.append(SpecPatch(
+                        number=int(number_str) if number_str else None,
+                        value=match.group('value'),
+                    ))
         click.secho(f'Found {len(patches)} ({patches}) patches from spec file', fg='yellow')
+
+        try:
+            mode = detect_export_mode(patches)
+        except ExportModeDetectionError as e:
+            click.secho(str(e), fg='red')
+            exit(1)
+        click.secho(f'Detected mode: {mode.value}', fg='yellow')
+
+        if mode == Mode.NUMBERED:
+            # Bare Patch: lines are only legitimate in numberless mode.
+            for record in patches:
+                if record.number is None:
+                    click.secho("Patch number is missing.", fg='red')
+                    exit(1)
 
         click.secho(f'Changing working directory to {repo}', fg='yellow')
         os.chdir(repo)
@@ -263,12 +338,12 @@ regex=True)}
             *shlex.split(f"git reset --hard {base}")
         )
 
-        for patch_number, patch in patches.items():
+        for record in patches:
             head_hash = run(
                 *shlex.split(f"git rev-parse HEAD")
             )
 
-            patch_filename = patch.rsplit('/', 1)[-1]
+            patch_filename = record.value.rsplit('/', 1)[-1]
             try:
                 proc = run(
                     *shlex.split(f"git am --committer-date-is-author-date {path}/{patch_filename}")
@@ -283,14 +358,17 @@ regex=True)}
                 *shlex.split(f"git log --format=%B -n 1"),
                 stdout=subprocess.PIPE
             )
-            # checking if patch number is present at the beginning of the
-            # commit message
-            pattern = re.compile(r"^[0-9]{5}:")
-            if not pattern.match(proc.stdout):
-                patch_number_with_padding = patch_number.rjust(5, '0')
-                proc = run(
-                    'git', 'commit', '--amend', '-m', f'{patch_number_with_padding}: {proc.stdout}'
-                )
+            if mode == Mode.NUMBERED:
+                # checking if patch number is present at the beginning of the
+                # commit message
+                pattern = re.compile(r"^[0-9]{5}:")
+                if not pattern.match(proc.stdout):
+                    patch_number_with_padding = str(record.number).rjust(5, '0')
+                    proc = run(
+                        'git', 'commit', '--amend', '-m', f'{patch_number_with_padding}: {proc.stdout}'
+                    )
+            # In numberless mode (bare Patch: or RHEL 8 compat PatchN:),
+            # never insert any number into the commit message.
             head1_hash = run(
                 *shlex.split(f"git rev-parse HEAD^1")
             )

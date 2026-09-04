@@ -14,6 +14,19 @@ The rest of the commit message should be usable in the spec.
 (It also mostly works with the `fedora-2.7` branch, which uses different
 conventions.)
 
+Alternatively, a **numberless mode** is supported (intended for Python 3.10+,
+which no longer has the specially-handled patch 189): if none of the commits
+being imported have a `NNNNN: ` prefix, `importpatches` switches to
+numberless mode automatically. Patch filenames are always freshly generated
+(no NNNNN- prefix, no filename-stability lookup), and the spec declares bare
+`Patch:` (or, with `--rhel8-compat`, sequential `Patch1:`, `Patch2:`, ... with
+no semantic meaning, for RPM on RHEL 8, which doesn't support bare `Patch:`
+tags). `exportpatches` auto-detects numberless mode too, from the spec's
+`Patch` declarations and patch filenames (rather than commit messages, since
+it hasn't created any commits yet), and never adds a number (real or RHEL 8
+compat) to a commit message in that mode. Commits/patches must not mix
+numbered and numberless conventions; both scripts error out if they do.
+
 [fedora-python/cpython]: https://github.com/fedora-python/cpython
 [patch registry]: https://fedoraproject.org/wiki/SIGs/Python/PythonPatches
 
@@ -22,6 +35,7 @@ conventions.)
 
 - [click](https://pypi.org/project/click/) (`dnf install python3-click`)
 - [rpmautospec](https://docs.pagure.org/rpmautospec/) (`dnf install python3-rpmautospec`)
+- [pytest](https://pypi.org/project/pytest/) (`dnf install python3-pytest`), only needed to run the test suite
 
 
 ## Setup
@@ -61,6 +75,11 @@ It replaces the whole patches section between the
 `(New patches go here ^^^)` markers, removing old patch files and moving
 the new ones into place.
 
+In numberless mode (auto-detected, see above), patch filenames are always
+generated fresh from the commit summary instead of being matched by number,
+and the spec gets bare `Patch:` lines (or `Patch1:`, `Patch2:`, ... with
+`--rhel8-compat`, which is a no-op in numbered mode).
+
 
 ### exportpatches
 
@@ -70,6 +89,10 @@ producing the fedora-X.Y branch from the upstream vX.Y.Z tag.
 Each patch becomes one commit, with the summary line prefixed by its patch
 number (NNNNN: ) as required by the patch registry.
 It then tags the result and pushes the branch and tag to the fedora remote.
+
+In numberless mode (auto-detected from the spec's `Patch` declarations, see
+above), no number is ever prefixed onto a commit's summary line, even if the
+spec uses the `--rhel8-compat` sequential `Patch1:`, `Patch2:`, ... scheme.
 
 
 ## Git hash IDs
@@ -86,6 +109,11 @@ Spec files using `%autorelease` are supported.
 When `%autorelease` is detected, the release number is calculated
 via `rpmautospec.calculate_release()` instead of parsing it from the spec
 or querying `rpm`.
+
+
+## Running tests
+
+    python3 -m pytest
 
 
 ## License
