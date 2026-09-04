@@ -111,6 +111,12 @@ def run(*args, echo_stdout=True, **kwargs):
     return result
 
 
+def tag_exists(tag):
+    """Whether `tag` already exists in the repository (cwd)"""
+    repo_tags = run(*shlex.split(f"git tag --list {tag}"), echo_stdout=False)
+    return any(repo_tag.startswith(tag) for repo_tag in repo_tags.stdout.split('\n'))
+
+
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
 @click.option(
     '-r', '--repo', default=None, metavar='REPO',
@@ -141,10 +147,15 @@ def run(*args, echo_stdout=True, **kwargs):
     '-t', '--tag', default=None, metavar='XY',
     help="Custom tag, e.g. fedora-3.13.0-1"
 )
+@click.option(
+    '--no-push', is_flag=True, default=False,
+    help="Tag the result but skip pushing to the remote, and skip the " +
+        "interactive push confirmation. Useful when testing exportpatches."
+)
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, base, branch, python_version, release, tag):
+def main(spec, repo, base, branch, python_version, release, tag, no_push):
     """
     Update cpython Git repository with patches from dist-git spec
 
@@ -382,37 +393,41 @@ def main(spec, repo, base, branch, python_version, release, tag):
     if tag == None:
         tag = f'fedora-{upstream_version}-{release}'
 
-    while(True):
-        click.secho(f'Checking if tag ({tag}) already exists', fg='yellow')
-        repo_tags = run(
-            *shlex.split(f"git tag --list {tag}"),
-            echo_stdout=False
-        )
-        tag_exists = False
-        for repo_tag in repo_tags.stdout.split('\n'):
-            if repo_tag.startswith(f"{tag}"):
-                tag_exists = True
-        if tag_exists:
+    if no_push:
+        # Avoid the interactive tag-collision prompt below too, since
+        # --no-push is meant for non-interactive testing.
+        if tag_exists(tag):
             click.secho(
-                f"Tag ({tag}) already exists in the repository.",
+                f"Tag ({tag}) already exists; --no-push given, skipping tag creation.",
                 fg='yellow',
             )
-            click.secho(f"Create a new tag? [y/n]", fg='yellow')
-            c = input()
-            if c == 'y':
-                tag = input("Tag name: ")
-            else:
-                click.secho(
-                    f"Exiting...",
-                    fg='red',
-                )
-                exit(1)
         else:
-            break
+            click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
+            run(*shlex.split(f"git tag {tag}"))
+    else:
+        while(True):
+            click.secho(f'Checking if tag ({tag}) already exists', fg='yellow')
+            if tag_exists(tag):
+                click.secho(
+                    f"Tag ({tag}) already exists in the repository.",
+                    fg='yellow',
+                )
+                click.secho(f"Create a new tag? [y/n]", fg='yellow')
+                c = input()
+                if c == 'y':
+                    tag = input("Tag name: ")
+                else:
+                    click.secho(
+                        f"Exiting...",
+                        fg='red',
+                    )
+                    exit(1)
+            else:
+                break
 
-    click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
+        click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
 
-    run(*shlex.split(f"git tag {tag}"))
+        run(*shlex.split(f"git tag {tag}"))
 
     click.secho(
         f"Following commands will push the changes:",
@@ -420,24 +435,28 @@ def main(spec, repo, base, branch, python_version, release, tag):
     )
     print(f"git push fedora-python {tag}")
     print(f"git push --force -u fedora-python fedora-{python_version}")
-    click.secho(
-        f"Do you wish to continue? [y/n]",
-        fg='yellow',
-    )
-    c = input()
-    if c == 'y':
-        proc = run(
-            *shlex.split(f"git push fedora-python {tag}")
-        )
-        proc = run(
-            *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
-        )
+
+    if no_push:
+        click.secho("--no-push given, skipping push.", fg='yellow')
     else:
         click.secho(
-            f"Exiting...",
-            fg='red',
+            f"Do you wish to continue? [y/n]",
+            fg='yellow',
         )
-        exit(1)
+        c = input()
+        if c == 'y':
+            proc = run(
+                *shlex.split(f"git push fedora-python {tag}")
+            )
+            proc = run(
+                *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
+            )
+        else:
+            click.secho(
+                f"Exiting...",
+                fg='red',
+            )
+            exit(1)
 
     click.secho('OK', fg='green')
 
