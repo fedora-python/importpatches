@@ -6,6 +6,7 @@ import sys
 import shlex
 import re
 import dataclasses
+import enum
 from textwrap import dedent
 import tempfile
 import shutil
@@ -60,26 +61,73 @@ def removeprefix(self, prefix):
         return self
 
 
-@dataclasses.dataclass
-class PatchInformation:
-    """All information needed about a patch"""
-    number: int
-    patch_id: str
-    comment: str
-    filename: Path
-    trailer: str = ''
+class Mode(enum.Enum):
+    NUMBERED = 'numbered'
+    NUMBERLESS = 'numberless'
 
 
-def handle_patch(repo, commit_id, *, tempdir, python_version):
-    """Handle a single patch, writing it to `tempdir` and returning info
-    """
-    message = run(
-        'git', 'show', '-s', '--format=%B', commit_id,
-        cwd=repo,
-    ).stdout.strip()
-    summary, _, message_body = message.partition('\n')
-    match = PATCH_NUMBER_RE.match(summary)
+class ModeDetectionError(ValueError):
+    """Raised when commits mix numbered and numberless conventions"""
+
+
+def find_dirty_style_number(summary, message):
+    """Resolve the patch number for an 'old and dirty' style commit summary
+    (a bare patch filename), or None if none can be found"""
+    match = re.search(r'\d{5,}', message)
     if match:
+        return int(match.group(0))
+    return SPECIAL_PATCH_NUMBERS.get(summary)
+
+
+def detect_import_mode(messages, log):
+    """Detect whether commits use numbered or numberless conventions
+
+    `messages` maps commit_id -> full commit message text (as returned by
+    `git show -s --format=%B`). `log` is the list of commit ids to inspect
+    (order doesn't matter for detection).
+
+    Returns Mode.NUMBERED or Mode.NUMBERLESS. Raises ModeDetectionError if
+    commits mix both conventions.
+    """
+    numbered_ids = []
+    numberless_ids = []
+    for commit_id in log:
+        message = messages[commit_id]
+        summary = message.partition('\n')[0]
+        if PATCH_NUMBER_RE.match(summary):
+            numbered_ids.append(commit_id)
+        elif summary.endswith('.patch') and FLIENAME_SAFE_RE.match(summary) and \
+                find_dirty_style_number(summary, message) is not None:
+            # "old and dirty" Python 2 style commits always carry a number
+            # (in the message body or SPECIAL_PATCH_NUMBERS), so they count
+            # as numbered too.
+            numbered_ids.append(commit_id)
+        else:
+            numberless_ids.append(commit_id)
+
+    if numbered_ids and numberless_ids:
+        raise ModeDetectionError(
+            'Commits mix numbered and numberless conventions; cannot '
+            'auto-detect mode.\n'
+            'Numbered-looking commits: '
+            + ', '.join(c[:9] for c in numbered_ids) + '\n'
+            'Numberless-looking commits: '
+            + ', '.join(c[:9] for c in numberless_ids)
+        )
+    if numberless_ids:
+        return Mode.NUMBERLESS
+    return Mode.NUMBERED
+
+
+def determine_patch_number_and_filename(commit_id, summary, message, mode):
+    """Determine a patch's number (or None) and filename
+
+    In Mode.NUMBERED, an existing NNNNN-*.patch file is reused if found,
+    to keep filenames stable; otherwise (or in Mode.NUMBERLESS) a fresh
+    filename is generated from the commit summary.
+    """
+    if mode == Mode.NUMBERED and PATCH_NUMBER_RE.match(summary):
+        match = PATCH_NUMBER_RE.match(summary)
         number = int(match.group(1))
         paths = list(Path('.').glob(f'{number:05d}-*.patch'))
         if len(paths) == 0:
@@ -91,21 +139,41 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
             exit(
                 'More than one patch file matches {number}: {paths_msg}'
             )
-    elif summary.endswith('.patch') and FLIENAME_SAFE_RE.match(summary):
+    elif mode == Mode.NUMBERED and summary.endswith('.patch') and \
+            FLIENAME_SAFE_RE.match(summary):
         path = Path(summary)
-        match = re.search(r'\d{5,}', message)
-        if match:
-            number = int(str(match.group(0)))
-        elif summary in SPECIAL_PATCH_NUMBERS:
-            number = SPECIAL_PATCH_NUMBERS[summary]
-        else:
+        number = find_dirty_style_number(summary, message)
+        if number is None:
             exit(
                 f'Cannot find patch number in {commit_id[:9]}: {summary}'
             )
+    elif mode == Mode.NUMBERLESS:
+        number = None
+        path = Path(slugify(summary) + '.patch')
     else:
         exit(
             f'Cannot derive patch filename from {commit_id[:9]}: {summary}'
         )
+    return number, path
+
+
+@dataclasses.dataclass
+class PatchInformation:
+    """All information needed about a patch"""
+    patch_id: str
+    comment: str
+    filename: Path
+    number: int | None = None
+    trailer: str = ''
+
+
+def handle_patch(repo, commit_id, message, *, tempdir, python_version, mode):
+    """Handle a single patch, writing it to `tempdir` and returning info
+    """
+    summary, _, message_body = message.partition('\n')
+    number, path = determine_patch_number_and_filename(
+        commit_id, summary, message, mode,
+    )
 
     patch_path = tempdir / path.name
 
@@ -124,7 +192,7 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
         hash_id = run('git', 'patch-id', '--stable', stdin=f).stdout.split()[0]
 
     spec_comment = []
-    if summary.endswith('.patch'):
+    if summary.endswith('.patch') and number is not None:
         message_body = removeprefix(message_body.strip(), f'{number:05d} #\n')
     else:
         spec_comment.append(re.sub(PATCH_NUMBER_RE, '', summary))
@@ -141,8 +209,11 @@ def handle_patch(repo, commit_id, *, tempdir, python_version):
         trailer = ''
 
     return PatchInformation(
-        number, hash_id, '\n'.join(spec_comment).strip(), path.name,
-        trailer,
+        patch_id=hash_id,
+        comment='\n'.join(spec_comment).strip(),
+        filename=path.name,
+        number=number,
+        trailer=trailer,
     )
 
 
@@ -228,10 +299,17 @@ def run(*args, echo_stdout=True, **kwargs):
     '-v', '--python-version', default=None, metavar='X.Y',
     help="Python version, e.g. 3.10 (default extracted from spec name)"
 )
+@click.option(
+    '--rhel8-compat', is_flag=True, default=False,
+    help="In numberless mode, write sequential fake Patch1:, Patch2:, ... " +
+        "numbers in the spec (not zero-padded, not part of the filename " +
+        "or comment) for compatibility with RPM on RHEL 8, which doesn't " +
+        "support bare 'Patch:' tags. No effect in numbered mode."
+)
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, base, head, python_version):
+def main(spec, repo, base, head, python_version, rhel8_compat):
     """Update Fedora Python dist-git spec & patches from a Git repository
 
     Meant to be run in a local clone of Fedora's pythonX.Y dist-git.
@@ -262,6 +340,13 @@ def main(spec, repo, base, head, python_version):
 
     Patch 189 is handled specially: version numbers of bundled packages
     are extracted from it.
+
+    If none of the commits between TAG and BRANCH have a NNNNN: prefix,
+    numberless mode is used instead: commit summaries are plain text,
+    patch filenames are always freshly generated from the summary, and
+    the spec declares bare ``Patch:`` (or, with --rhel8-compat, sequential
+    ``Patch1:``, ``Patch2:``, ... with no semantic meaning). Commits must
+    not mix numbered and numberless conventions.
 
     Note that patch files are read and written from the current directory,
     regardless of the --repo option.
@@ -382,19 +467,52 @@ def main(spec, repo, base, head, python_version):
                 'was selected; try giving -c explicitly.'
             )
 
+        messages = {
+            commit_id: run(
+                'git', 'show', '-s', '--format=%B', commit_id,
+                cwd=repo, echo_stdout=False,
+            ).stdout.strip()
+            for commit_id in log
+        }
+        try:
+            mode = detect_import_mode(messages, log)
+        except ModeDetectionError as e:
+            exit(str(e))
+        click.secho(f'Detected mode: {mode.value}', fg='yellow')
+
         patches_section = []
+        rhel8_number = 0
+        seen_filenames = {}
         for commit_id in reversed(log):
             result = handle_patch(
-                repo, commit_id, tempdir=tempdir,
-                python_version=python_version,
+                repo, commit_id, messages[commit_id], tempdir=tempdir,
+                python_version=python_version, mode=mode,
             )
+            if result.filename in seen_filenames:
+                exit(
+                    f'Patch filename {result.filename} would be generated ' +
+                    f'for both {seen_filenames[result.filename][:9]} and ' +
+                    f'{commit_id[:9]}; rename one of the commits so their ' +
+                    'summaries produce distinct filenames.'
+                )
+            seen_filenames[result.filename] = commit_id
             comment = '\n'.join(
                 f'# {l}' if l else '#' for l in result.comment.splitlines()
             )
+            if result.number is not None:
+                header = f'# {result.number:05d} # {result.patch_id}'
+                patch_tag = f'Patch{result.number}: {result.filename}'
+            else:
+                header = f'# {result.patch_id}'
+                if rhel8_compat:
+                    rhel8_number += 1
+                    patch_tag = f'Patch{rhel8_number}: {result.filename}'
+                else:
+                    patch_tag = f'Patch: {result.filename}'
             section = dedent(f"""
-                # {result.number:05d} # {result.patch_id}
+                {header}
                 %s
-                Patch{result.number}: {result.filename}
+                {patch_tag}
             """) % comment.replace('%', '%%')
             if result.trailer:
                 section = section.rstrip() + result.trailer

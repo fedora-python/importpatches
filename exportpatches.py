@@ -7,23 +7,91 @@ import re
 import readline
 import tempfile
 import os
+import dataclasses
+import enum
 
 import click  # dnf install python3-click
 from rpmautospec import specfile_uses_rpmautospec, calculate_release
 
 
 REPO_KEY = 'importpatches.upstream'
+PATCH_LINE_RE = re.compile(r'^Patch(?P<number>[0-9]{1,5})?:\s*(?P<value>\S+)')
+NUMBERED_FILENAME_RE = re.compile(r'^\d{5}-')
 
 
-def removeprefix(self, prefix, regex=False):
-    if regex:
-        return re.sub(r'^{0}'.format(prefix), '', self)
+class Mode(enum.Enum):
+    NUMBERED = 'numbered'
+    NUMBERLESS = 'numberless'
+
+
+class ExportModeDetectionError(ValueError):
+    """Raised when a spec's Patch declarations are ambiguous/inconsistent"""
+
+
+@dataclasses.dataclass
+class SpecPatch:
+    """A single Patch declaration parsed from the spec file"""
+    number: int | None
+    value: str
+
+
+def find_duplicate_patch_numbers(patches):
+    """Return the set of patch numbers that appear more than once in
+    `patches` (a list of SpecPatch); ignores entries with no number."""
+    seen = set()
+    duplicates = set()
+    for p in patches:
+        if p.number is None:
+            continue
+        if p.number in seen:
+            duplicates.add(p.number)
+        seen.add(p.number)
+    return duplicates
+
+
+def detect_export_mode(patches):
+    """Detect whether spec Patch declarations use numbered or numberless
+    conventions
+
+    `patches` is a list of SpecPatch. URL-valued patches (typically added
+    temporarily by hand, e.g. for testing an upstream fix before it's
+    imported properly) are excluded from detection and never influence the
+    result either way. Among the remaining, local-file patches: a 5-digit
+    filename prefix is the primary signal for Mode.NUMBERED (legacy).
+    Otherwise, bare Patch: declarations, or PatchN: numbers present only in
+    the spec (the RHEL 8 compatibility scheme, which has no semantic
+    meaning, so numbers need not be contiguous or in any particular order
+    -- patches may have been manually removed, leaving gaps), mean
+    Mode.NUMBERLESS. A mix of bare and numbered declarations is ambiguous
+    and raises ExportModeDetectionError.
+    """
+    if not patches:
+        return Mode.NUMBERED
+
+    local_patches = [p for p in patches if '://' not in p.value]
+    if not local_patches:
+        return Mode.NUMBERED
+
+    filenames = [p.value.rsplit('/', 1)[-1] for p in local_patches]
+    if any(NUMBERED_FILENAME_RE.match(fn) for fn in filenames):
+        return Mode.NUMBERED
+
+    numbers = [p.number for p in local_patches]
+    if all(n is None for n in numbers) or all(n is not None for n in numbers):
+        return Mode.NUMBERLESS
+    raise ExportModeDetectionError(
+        'Cannot determine numbering mode from spec Patch declarations: no '
+        'filename has a 5-digit number prefix, but Patch tag numbers are a '
+        f'mix of numbered and bare declarations: {numbers!r}'
+    )
+
+
+def removeprefix(self, prefix):
+    # PEP-616 backport
+    if self.startswith(prefix):
+        return self[len(prefix):]
     else:
-        # PEP-616 backport
-        if self.startswith(prefix):
-            return self[len(prefix):]
-        else:
-            return self
+        return self
 
 def run(*args, echo_stdout=True, **kwargs):
     """Like subprocess.run, but with logging and more appropriate defaults"""
@@ -57,6 +125,12 @@ def run(*args, echo_stdout=True, **kwargs):
     return result
 
 
+def tag_exists(tag):
+    """Whether `tag` already exists in the repository (cwd)"""
+    repo_tags = run(*shlex.split(f"git tag --list {tag}"), echo_stdout=False)
+    return any(repo_tag.startswith(tag) for repo_tag in repo_tags.stdout.split('\n'))
+
+
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
 @click.option(
     '-r', '--repo', default=None, metavar='REPO',
@@ -87,10 +161,15 @@ def run(*args, echo_stdout=True, **kwargs):
     '-t', '--tag', default=None, metavar='XY',
     help="Custom tag, e.g. fedora-3.13.0-1"
 )
+@click.option(
+    '--no-push', is_flag=True, default=False,
+    help="Tag the result but skip pushing to the remote, and skip the " +
+        "interactive push confirmation. Useful when testing exportpatches."
+)
 @click.argument(
     'spec', default=None, required=False, type=Path,
 )
-def main(spec, repo, base, branch, python_version, release, tag):
+def main(spec, repo, base, branch, python_version, release, tag, no_push):
     """
     Update cpython Git repository with patches from dist-git spec
 
@@ -105,6 +184,13 @@ def main(spec, repo, base, branch, python_version, release, tag):
 
     PatchNNNNN: <file>/<url>, where NNNNN is a patch number from:
         https://fedoraproject.org/wiki/SIGs/Python/PythonPatches
+
+    Numberless mode is also supported and auto-detected from the spec: if
+    no Patch filename has a NNNNN- prefix, declarations may be either bare
+    Patch: <file>/<url>, or PatchN: <file>/<url> with N forming a plain
+    1..N sequence (the RHEL 8 compatibility scheme, which has no semantic
+    meaning). In numberless mode, no number is ever added to a commit
+    message, even the RHEL 8 compatibility ones.
 
     When exportpatches successfuly finishes, it is expected to run
     importpatches to import patch to the spec file in a standardized form.
@@ -205,23 +291,45 @@ def main(spec, repo, base, branch, python_version, release, tag):
             click.secho(f'Assuming --release={release}', fg='yellow')
 
         with spec.open() as f:
-            patches = {}
+            patches = []
             for line in f:
                 line = line.strip()
                 if line.startswith('Patch'):
-                    try:
-                        patch_number = removeprefix(re.match("^Patch[0-9]{1,5}:",
-line).group(), 'Patch')
-                    except AttributeError:
+                    match = PATCH_LINE_RE.match(line)
+                    if not match:
                         click.secho(
-                            "Patch number is missing.",
+                            f"Could not parse Patch line: {line}",
                             fg='red',
                         )
                         exit(1)
-                    update = {patch_number : removeprefix(line, 'Patch[0-9]*: *',
-regex=True)}
-                    patches.update(**update)
+                    number_str = match.group('number')
+                    patches.append(SpecPatch(
+                        number=int(number_str) if number_str else None,
+                        value=match.group('value'),
+                    ))
         click.secho(f'Found {len(patches)} ({patches}) patches from spec file', fg='yellow')
+
+        duplicate_numbers = find_duplicate_patch_numbers(patches)
+        if duplicate_numbers:
+            click.secho(
+                f'Duplicate Patch numbers found in spec: {sorted(duplicate_numbers)}',
+                fg='red',
+            )
+            exit(1)
+
+        try:
+            mode = detect_export_mode(patches)
+        except ExportModeDetectionError as e:
+            click.secho(str(e), fg='red')
+            exit(1)
+        click.secho(f'Detected mode: {mode.value}', fg='yellow')
+
+        if mode == Mode.NUMBERED:
+            # Bare Patch: lines are only legitimate in numberless mode.
+            for record in patches:
+                if record.number is None:
+                    click.secho("Patch number is missing.", fg='red')
+                    exit(1)
 
         click.secho(f'Changing working directory to {repo}', fg='yellow')
         os.chdir(repo)
@@ -263,12 +371,12 @@ regex=True)}
             *shlex.split(f"git reset --hard {base}")
         )
 
-        for patch_number, patch in patches.items():
+        for record in patches:
             head_hash = run(
                 *shlex.split(f"git rev-parse HEAD")
             )
 
-            patch_filename = patch.rsplit('/', 1)[-1]
+            patch_filename = record.value.rsplit('/', 1)[-1]
             try:
                 proc = run(
                     *shlex.split(f"git am --committer-date-is-author-date {path}/{patch_filename}")
@@ -283,14 +391,17 @@ regex=True)}
                 *shlex.split(f"git log --format=%B -n 1"),
                 stdout=subprocess.PIPE
             )
-            # checking if patch number is present at the beginning of the
-            # commit message
-            pattern = re.compile(r"^[0-9]{5}:")
-            if not pattern.match(proc.stdout):
-                patch_number_with_padding = patch_number.rjust(5, '0')
-                proc = run(
-                    'git', 'commit', '--amend', '-m', f'{patch_number_with_padding}: {proc.stdout}'
-                )
+            if mode == Mode.NUMBERED:
+                # checking if patch number is present at the beginning of the
+                # commit message
+                pattern = re.compile(r"^[0-9]{5}:")
+                if not pattern.match(proc.stdout):
+                    patch_number_with_padding = str(record.number).rjust(5, '0')
+                    proc = run(
+                        'git', 'commit', '--amend', '-m', f'{patch_number_with_padding}: {proc.stdout}'
+                    )
+            # In numberless mode (bare Patch: or RHEL 8 compat PatchN:),
+            # never insert any number into the commit message.
             head1_hash = run(
                 *shlex.split(f"git rev-parse HEAD^1")
             )
@@ -304,37 +415,41 @@ regex=True)}
     if tag == None:
         tag = f'fedora-{upstream_version}-{release}'
 
-    while(True):
-        click.secho(f'Checking if tag ({tag}) already exists', fg='yellow')
-        repo_tags = run(
-            *shlex.split(f"git tag --list {tag}"),
-            echo_stdout=False
-        )
-        tag_exists = False
-        for repo_tag in repo_tags.stdout.split('\n'):
-            if repo_tag.startswith(f"{tag}"):
-                tag_exists = True
-        if tag_exists:
+    if no_push:
+        # Avoid the interactive tag-collision prompt below too, since
+        # --no-push is meant for non-interactive testing.
+        if tag_exists(tag):
             click.secho(
-                f"Tag ({tag}) already exists in the repository.",
+                f"Tag ({tag}) already exists; --no-push given, skipping tag creation.",
                 fg='yellow',
             )
-            click.secho(f"Create a new tag? [y/n]", fg='yellow')
-            c = input()
-            if c == 'y':
-                tag = input("Tag name: ")
-            else:
-                click.secho(
-                    f"Exiting...",
-                    fg='red',
-                )
-                exit(1)
         else:
-            break
+            click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
+            run(*shlex.split(f"git tag {tag}"))
+    else:
+        while(True):
+            click.secho(f'Checking if tag ({tag}) already exists', fg='yellow')
+            if tag_exists(tag):
+                click.secho(
+                    f"Tag ({tag}) already exists in the repository.",
+                    fg='yellow',
+                )
+                click.secho(f"Create a new tag? [y/n]", fg='yellow')
+                c = input()
+                if c == 'y':
+                    tag = input("Tag name: ")
+                else:
+                    click.secho(
+                        f"Exiting...",
+                        fg='red',
+                    )
+                    exit(1)
+            else:
+                break
 
-    click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
+        click.secho(f"About to tag the current state of repository with {tag}.", fg='yellow')
 
-    run(*shlex.split(f"git tag {tag}"))
+        run(*shlex.split(f"git tag {tag}"))
 
     click.secho(
         f"Following commands will push the changes:",
@@ -342,24 +457,28 @@ regex=True)}
     )
     print(f"git push fedora-python {tag}")
     print(f"git push --force -u fedora-python fedora-{python_version}")
-    click.secho(
-        f"Do you wish to continue? [y/n]",
-        fg='yellow',
-    )
-    c = input()
-    if c == 'y':
-        proc = run(
-            *shlex.split(f"git push fedora-python {tag}")
-        )
-        proc = run(
-            *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
-        )
+
+    if no_push:
+        click.secho("--no-push given, skipping push.", fg='yellow')
     else:
         click.secho(
-            f"Exiting...",
-            fg='red',
+            f"Do you wish to continue? [y/n]",
+            fg='yellow',
         )
-        exit(1)
+        c = input()
+        if c == 'y':
+            proc = run(
+                *shlex.split(f"git push fedora-python {tag}")
+            )
+            proc = run(
+                *shlex.split(f"git push --force -u fedora-python fedora-{python_version}")
+            )
+        else:
+            click.secho(
+                f"Exiting...",
+                fg='red',
+            )
+            exit(1)
 
     click.secho('OK', fg='green')
 
