@@ -388,6 +388,20 @@ def test_export_numberless_rhel8_compat_numbers_out_of_order(distgit, upstream, 
     ]
 
 
+def test_export_duplicate_patch_numbers_errors(distgit, upstream, env):
+    write_spec(distgit, existing=(
+        'Patch5: foo.patch\n'
+        'Patch5: bar.patch\n'
+    ))
+    commit_spec(distgit, env)
+
+    result = run_exportpatches(distgit, upstream, env, '--tag', 'test-duplicate')
+
+    assert result.returncode != 0
+    assert 'duplicate' in (result.stdout + result.stderr).lower()
+    assert commit_subjects(upstream, env) == []
+
+
 def test_export_no_push_skips_push(distgit, upstream, env):
     build_patch_files(upstream, distgit, env, [
         ('00001: A numbered patch', '00001-a-numbered-patch.patch'),

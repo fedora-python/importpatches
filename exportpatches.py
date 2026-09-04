@@ -35,6 +35,20 @@ class SpecPatch:
     value: str
 
 
+def find_duplicate_patch_numbers(patches):
+    """Return the set of patch numbers that appear more than once in
+    `patches` (a list of SpecPatch); ignores entries with no number."""
+    seen = set()
+    duplicates = set()
+    for p in patches:
+        if p.number is None:
+            continue
+        if p.number in seen:
+            duplicates.add(p.number)
+        seen.add(p.number)
+    return duplicates
+
+
 def detect_export_mode(patches):
     """Detect whether spec Patch declarations use numbered or numberless
     conventions
@@ -294,6 +308,14 @@ def main(spec, repo, base, branch, python_version, release, tag, no_push):
                         value=match.group('value'),
                     ))
         click.secho(f'Found {len(patches)} ({patches}) patches from spec file', fg='yellow')
+
+        duplicate_numbers = find_duplicate_patch_numbers(patches)
+        if duplicate_numbers:
+            click.secho(
+                f'Duplicate Patch numbers found in spec: {sorted(duplicate_numbers)}',
+                fg='red',
+            )
+            exit(1)
 
         try:
             mode = detect_export_mode(patches)

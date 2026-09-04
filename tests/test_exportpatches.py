@@ -98,3 +98,20 @@ def test_detect_export_mode_numberless_rhel8_compat_with_gaps():
 
 def test_detect_export_mode_no_patches_defaults_numbered():
     assert ep.detect_export_mode([]) == ep.Mode.NUMBERED
+
+
+# --- find_duplicate_patch_numbers ---
+
+def test_find_duplicate_patch_numbers_none_duplicated():
+    patches = [P(1, 'foo.patch'), P(2, 'bar.patch')]
+    assert ep.find_duplicate_patch_numbers(patches) == set()
+
+
+def test_find_duplicate_patch_numbers_detects_duplicate():
+    patches = [P(1, 'foo.patch'), P(1, 'bar.patch'), P(2, 'baz.patch')]
+    assert ep.find_duplicate_patch_numbers(patches) == {1}
+
+
+def test_find_duplicate_patch_numbers_ignores_bare_entries():
+    patches = [P(None, 'foo.patch'), P(None, 'bar.patch')]
+    assert ep.find_duplicate_patch_numbers(patches) == set()
